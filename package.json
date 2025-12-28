@@ -7,9 +7,15 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "electron .",
+    "build": "electron-builder"
   },
   "devDependencies": {
-    "electron": "^39.2.7"
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12",
+    "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "electron-store": "^11.0.2"
   }
 }
