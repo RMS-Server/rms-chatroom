@@ -103,6 +103,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -129,7 +130,6 @@ function createWindow() {
   console.log('[electron] indexHtml =', indexHtml);
 
   win.loadFile(indexHtml);
-  win.webContents.openDevTools();
 
   return win;
 }
@@ -226,21 +226,44 @@ function setupIpc() {
 // App 生命周期（保持你原 CSP + 原逻辑）
 // =====================
 app.whenReady().then(async () => {
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'self'; " +
-          "script-src 'self'; " +
-          "style-src 'self' 'unsafe-inline'; " +
-          "img-src 'self' data: https:; " +
-          "connect-src 'self' https://preview-chatroom.rms.net.cn wss://preview-chatroom.rms.net.cn",
-        ],
-      },
+  app.whenReady().then(() => {
+    (async () => {
+      const CSP =
+        "default-src 'self'; " +
+        "script-src 'self'; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data: blob: file: https:; " +
+        "connect-src 'self' " +
+          "https://preview-chatroom.rms.net.cn " +
+          "http://preview-chatroom.rms.net.cn " +
+          "wss://preview-chatroom.rms.net.cn " +
+          "ws://preview-chatroom.rms.net.cn " +
+          "http://localhost:8000 " +
+          "http://127.0.0.1:8000 " +
+          "ws://localhost:8000 " +
+          "ws://127.0.0.1:8000;";
+
+      session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+        const headers = { ...(details.responseHeaders || {}) };
+
+        // 删掉旧 CSP，避免叠加
+        delete headers["Content-Security-Policy"];
+        delete headers["content-security-policy"];
+        delete headers["Content-Security-Policy-Report-Only"];
+        delete headers["content-security-policy-report-only"];
+
+        headers["Content-Security-Policy"] = [CSP];
+        callback({ responseHeaders: headers });
+      });
+
+      setupIpc();
+      mainWin = createWindow();
+
+      await startCallbackServer(mainWin);
+    })().catch((err) => {
+      console.error("Startup failed:", err);
     });
   });
-
   setupIpc();
 
   mainWin = createWindow();

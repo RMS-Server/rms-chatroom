@@ -9,7 +9,7 @@ const music = useMusicStore()
 const voice = useVoiceStore()
 const auth = useAuthStore()
 
-const WS_BASE = import.meta.env.VITE_WS_BASE || 'ws://localhost:8000'
+const WS_BASE = import.meta.env.VITE_WS_BASE || 'ws://preview-chatroom.rms.net.cn'
 
 const searchInput = ref('')
 const showSearch = ref(false)
