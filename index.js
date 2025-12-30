@@ -1,43 +1,41 @@
-const { app, BrowserWindow, session, ipcMain, globalShortcut, shell } = require('electron');
-const path = require('path');
-const http = require('http');
-const fs = require('fs'); // ✅ 新增：读 html 文件
-const Store = require('electron-store').default;
+// index.js
+const { app, BrowserWindow, session, ipcMain, globalShortcut, shell } = require("electron");
+const path = require("path");
+const http = require("http");
+const fs = require("fs");
+const Store = require("electron-store").default;
+const { autoUpdater } = require("electron-updater");
 
 // =====================
-// Store（原有不变 + 新增 toggleMic 默认快捷键）
+// Store（默认快捷键）
 // =====================
 const store = new Store({
   defaults: {
     shortcuts: {
-      toggleWindow: 'CommandOrControl+Alt+K',
-      toggleMic: 'CommandOrControl+Alt+M', // ✅ 新增：开关麦克风
+      toggleWindow: "CommandOrControl+Alt+K",
+      toggleMic: "CommandOrControl+Alt+M",
     },
   },
 });
 
 let mainWin = null;
 let currentToggleShortcut = null;
-let currentMicShortcut = null; // ✅ 新增：记录麦克风快捷键
+let currentMicShortcut = null;
 
 // =====================
-// SSO 回调服务器（✅ 改：返回 html 文件）
+// SSO 回调服务器
 // =====================
 let callbackServer = null;
 let callbackUrl = null;
 
-// ✅ 新增：统一把同目录 html 文件读出来返回
 function sendHtmlFile(res, filename, statusCode = 200) {
   const filePath = path.join(__dirname, filename);
-
-  fs.readFile(filePath, 'utf8', (err, html) => {
+  fs.readFile(filePath, "utf8", (err, html) => {
     if (err) {
-      // 兜底：如果 html 文件不存在/读失败，至少别让接口挂着
-      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
       return res.end(`Cannot read file: ${filename}`);
     }
-
-    res.writeHead(statusCode, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8" });
     res.end(html);
   });
 }
@@ -48,17 +46,15 @@ function startCallbackServer(win) {
 
     callbackServer = http.createServer((req, res) => {
       try {
-        const u = new URL(req.url, 'http://127.0.0.1');
+        const u = new URL(req.url, "http://127.0.0.1");
 
-        if (u.pathname === '/callback') {
-          const token = u.searchParams.get('token');
-          const code = u.searchParams.get('code');
-          const state = u.searchParams.get('state');
-
-          console.log('[sso callback] got:', { token: !!token, code: !!code, state: !!state, raw: req.url });
+        if (u.pathname === "/callback") {
+          const token = u.searchParams.get("token");
+          const code = u.searchParams.get("code");
+          const state = u.searchParams.get("state");
 
           if (win && !win.isDestroyed()) {
-            win.webContents.send('auth:callback', {
+            win.webContents.send("auth:callback", {
               token: token || null,
               code: code || null,
               state: state || null,
@@ -66,30 +62,23 @@ function startCallbackServer(win) {
             });
           }
 
-          // ✅ 成功回调：返回 loginSuccess.html（同目录）
-          sendHtmlFile(res, './statusWebpage/loginSuccess.html', 200);
+          sendHtmlFile(res, "./statusWebpage/loginSuccess.html", 200);
           return;
         }
 
-        // ✅ 其它路径：返回 404.html（同目录）
-        sendHtmlFile(res, './statusWebpage/404.html', 404);
+        sendHtmlFile(res, "./statusWebpage/404.html", 404);
       } catch (e) {
-        console.log('[sso callback] server error:', e);
-
-        // ✅ 服务内部出错：返回 serverError.html（同目录，文件名带空格没问题）
-        sendHtmlFile(res, './statusWebpage/serverError.html', 500);
+        sendHtmlFile(res, "./statusWebpage/serverError.html", 500);
       }
     });
 
-    callbackServer.listen(0, '127.0.0.1', () => {
+    callbackServer.listen(0, "127.0.0.1", () => {
       const { port } = callbackServer.address();
       callbackUrl = `http://127.0.0.1:${port}/callback`;
-      console.log('[sso callback] listening at:', callbackUrl);
       resolve(callbackUrl);
     });
 
-    callbackServer.on('error', (err) => {
-      console.log('[sso callback] listen error:', err);
+    callbackServer.on("error", () => {
       callbackUrl = null;
       resolve(null);
     });
@@ -97,50 +86,37 @@ function startCallbackServer(win) {
 }
 
 // =====================
-// 创建窗口（保持不变）
+// 创建窗口
 // =====================
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    icon: path.join(__dirname, 'assets', 'icon.png'),
+    icon: path.join(__dirname, "assets", "icon.png"),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 
-  win.webContents.on('console-message', (event, level, message, line, sourceId) => {
-    console.log('[renderer]', message, 'at', `${sourceId}:${line}`);
-  });
-
-  win.webContents.on('did-fail-load', (event, code, desc, url) => {
-    console.log('[did-fail-load]', { code, desc, url });
-  });
-
-  win.webContents.on('render-process-gone', (event, details) => {
-    console.log('[render-process-gone]', details);
-  });
-
-  const distDir = path.join(__dirname, 'frontend', 'dist');
-  const indexHtml = path.join(distDir, 'index.html');
-
-  console.log('[electron] distDir =', distDir);
-  console.log('[electron] indexHtml =', indexHtml);
-
+  const distDir = path.join(__dirname, "frontend", "dist");
+  const indexHtml = path.join(distDir, "index.html");
   win.loadFile(indexHtml);
 
   return win;
 }
 
 // =====================
-// 原有：窗口显示/隐藏快捷键（保持不变）
+// 快捷键：显示/隐藏窗口
 // =====================
 function toggleMainWindow() {
   if (!mainWin) return;
   if (mainWin.isVisible()) mainWin.hide();
-  else { mainWin.show(); mainWin.focus(); }
+  else {
+    mainWin.show();
+    mainWin.focus();
+  }
 }
 
 function registerToggleShortcut(accelerator) {
@@ -148,25 +124,21 @@ function registerToggleShortcut(accelerator) {
     globalShortcut.unregister(currentToggleShortcut);
     currentToggleShortcut = null;
   }
-
-  if (!accelerator) return { ok: false, error: '快捷键为空' };
+  if (!accelerator) return { ok: false, error: "快捷键为空" };
 
   const ok = globalShortcut.register(accelerator, toggleMainWindow);
-  if (!ok) {
-    return { ok: false, error: '注册失败：可能被系统/其他软件占用，换个组合键' };
-  }
+  if (!ok) return { ok: false, error: "注册失败：可能被系统/其他软件占用，换个组合键" };
 
   currentToggleShortcut = accelerator;
   return { ok: true };
 }
 
 // =====================
-// ✅ 新增：麦克风开关快捷键（全局）
-// 触发时只发事件给渲染进程，真正“静音/开麦”由 Vue 控制
+// 快捷键：麦克风 toggle（发事件给渲染层）
 // =====================
 function toggleMic() {
   if (!mainWin || mainWin.isDestroyed()) return;
-  mainWin.webContents.send('mic:toggle');
+  mainWin.webContents.send("mic:toggle");
 }
 
 function registerMicShortcut(accelerator) {
@@ -174,45 +146,175 @@ function registerMicShortcut(accelerator) {
     globalShortcut.unregister(currentMicShortcut);
     currentMicShortcut = null;
   }
-
-  if (!accelerator) return { ok: false, error: '快捷键为空' };
+  if (!accelerator) return { ok: false, error: "快捷键为空" };
 
   const ok = globalShortcut.register(accelerator, toggleMic);
-  if (!ok) {
-    return { ok: false, error: '注册失败：可能被系统/其他软件占用，换个组合键' };
-  }
+  if (!ok) return { ok: false, error: "注册失败：可能被系统/其他软件占用，换个组合键" };
 
   currentMicShortcut = accelerator;
   return { ok: true };
 }
 
 // =====================
-// IPC（原有 shortcuts:get / shortcuts:set 不改名，只扩展 toggleMic）
+// CSP（你原来白名单那套）
+// =====================
+function installCSP() {
+  const CSP =
+    "default-src 'self'; " +
+    "script-src 'self'; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: blob: file: https:; " +
+    "connect-src 'self' " +
+    "https://preview-chatroom.rms.net.cn " +
+    "http://preview-chatroom.rms.net.cn " +
+    "wss://preview-chatroom.rms.net.cn " +
+    "ws://preview-chatroom.rms.net.cn " +
+    "http://localhost:8000 " +
+    "http://127.0.0.1:8000 " +
+    "ws://localhost:8000 " +
+    "ws://127.0.0.1:8000;";
+
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const headers = { ...(details.responseHeaders || {}) };
+
+    delete headers["Content-Security-Policy"];
+    delete headers["content-security-policy"];
+    delete headers["Content-Security-Policy-Report-Only"];
+    delete headers["content-security-policy-report-only"];
+
+    headers["Content-Security-Policy"] = [CSP];
+    callback({ responseHeaders: headers });
+  });
+}
+
+// =====================
+// 强制更新判断（核心）
+// =====================
+function textIncludesForceWords(text) {
+  const t = String(text || "").toLowerCase();
+  const words = [
+    "security",
+    "forced",
+    "force update",
+    "mandatory",
+    "must update",
+    "强制更新",
+    "必须更新",
+    "安全更新",
+  ].map((w) => w.toLowerCase());
+
+  return words.some((w) => t.includes(w));
+}
+
+function filenameIncludesSecurityOrForced(info) {
+  const files = (info && info.files) || [];
+  return files.some((f) => {
+    const url = f?.url || f?.path || "";
+    const name = String(url).split("/").pop() || "";
+    return /security|forced/i.test(name);
+  });
+}
+
+function isForcedUpdate(info) {
+  // 1) 文件名命中 Security/Forced
+  if (filenameIncludesSecurityOrForced(info)) return true;
+
+  // 2) releaseName / releaseNotes 命中强制词
+  if (textIncludesForceWords(info?.releaseName)) return true;
+
+  const notes = info?.releaseNotes;
+  if (Array.isArray(notes)) {
+    const joined = notes.map((n) => n?.note || "").join("\n");
+    if (textIncludesForceWords(joined)) return true;
+  } else {
+    if (textIncludesForceWords(notes)) return true;
+  }
+
+  return false;
+}
+
+// =====================
+// Auto Updater（可选更新 + 强制更新）
+// =====================
+function sendUpdaterStatus(payload) {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  mainWin.webContents.send("updater:status", payload);
+}
+
+function setupAutoUpdater() {
+  // 关键：可选更新让用户选，默认不自动下
+  autoUpdater.autoDownload = false;
+
+  autoUpdater.on("checking-for-update", () => sendUpdaterStatus({ state: "checking" }));
+
+  autoUpdater.on("update-available", async (info) => {
+    const forced = isForcedUpdate(info);
+
+    sendUpdaterStatus({ state: "available", forced, info });
+
+    // 强制更新：一发现就直接开始下载（让用户别多一步）
+    if (forced) {
+      try {
+        await autoUpdater.downloadUpdate();
+      } catch (e) {
+        sendUpdaterStatus({ state: "error", forced, message: String(e) });
+      }
+    }
+  });
+
+  autoUpdater.on("update-not-available", (info) => {
+    sendUpdaterStatus({ state: "none", forced: false, info });
+  });
+
+  autoUpdater.on("download-progress", (p) => {
+    sendUpdaterStatus({
+      state: "downloading",
+      percent: p.percent,
+      transferred: p.transferred,
+      total: p.total,
+      bytesPerSecond: p.bytesPerSecond,
+    });
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    const forced = isForcedUpdate(info);
+    sendUpdaterStatus({ state: "downloaded", forced, info });
+  });
+
+  autoUpdater.on("error", (err) => {
+    sendUpdaterStatus({ state: "error", forced: false, message: String(err) });
+  });
+}
+
+async function checkForUpdatesSafe() {
+  try {
+    return await autoUpdater.checkForUpdates();
+  } catch (e) {
+    sendUpdaterStatus({ state: "error", forced: false, message: String(e) });
+    return null;
+  }
+}
+
+// =====================
+// IPC（保留旧接口名 + 新增 updater / quit）
 // =====================
 function setupIpc() {
-  // ---- 原有：读快捷键
-  ipcMain.handle('shortcuts:get', () => store.get('shortcuts'));
-
-  // ---- 原有：写快捷键（扩展支持 toggleMic）
-  ipcMain.handle('shortcuts:set', (event, key, accelerator) => {
+  // 快捷键
+  ipcMain.handle("shortcuts:get", () => store.get("shortcuts"));
+  ipcMain.handle("shortcuts:set", (_event, key, accelerator) => {
     store.set(`shortcuts.${key}`, accelerator);
-
-    if (key === 'toggleWindow') return registerToggleShortcut(accelerator);
-    if (key === 'toggleMic') return registerMicShortcut(accelerator); // ✅ 新增
-
+    if (key === "toggleWindow") return registerToggleShortcut(accelerator);
+    if (key === "toggleMic") return registerMicShortcut(accelerator);
     return { ok: true };
   });
 
-  // ---- SSO：给渲染进程拿回调地址
-  ipcMain.handle('auth:getCallbackUrl', async () => {
-    if (!callbackUrl && mainWin) {
-      await startCallbackServer(mainWin);
-    }
+  // SSO
+  ipcMain.handle("auth:getCallbackUrl", async () => {
+    if (!callbackUrl && mainWin) await startCallbackServer(mainWin);
     return callbackUrl;
   });
 
-  // ---- SSO：打开系统默认浏览器
-  ipcMain.handle('auth:openExternal', async (event, url) => {
+  ipcMain.handle("auth:openExternal", async (_event, url) => {
     try {
       await shell.openExternal(url);
       return { ok: true };
@@ -220,78 +322,62 @@ function setupIpc() {
       return { ok: false, error: String(e) };
     }
   });
+
+  // 更新：检查 / 下载 / 安装
+  ipcMain.handle("updater:check", async () => checkForUpdatesSafe());
+  ipcMain.handle("updater:download", async () => {
+    try {
+      await autoUpdater.downloadUpdate();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+  ipcMain.handle("updater:install", async () => {
+    autoUpdater.quitAndInstall();
+    return true;
+  });
+
+  // 强制更新不更新就退出：给渲染层一个退出接口
+  ipcMain.handle("app:quit", async () => {
+    app.quit();
+    return true;
+  });
 }
 
 // =====================
-// App 生命周期（保持你原 CSP + 原逻辑）
+// App 生命周期（只保留一次）
 // =====================
 app.whenReady().then(async () => {
-  app.whenReady().then(() => {
-    (async () => {
-      const CSP =
-        "default-src 'self'; " +
-        "script-src 'self'; " +
-        "style-src 'self' 'unsafe-inline'; " +
-        "img-src 'self' data: blob: file: https:; " +
-        "connect-src 'self' " +
-          "https://preview-chatroom.rms.net.cn " +
-          "http://preview-chatroom.rms.net.cn " +
-          "wss://preview-chatroom.rms.net.cn " +
-          "ws://preview-chatroom.rms.net.cn " +
-          "http://localhost:8000 " +
-          "http://127.0.0.1:8000 " +
-          "ws://localhost:8000 " +
-          "ws://127.0.0.1:8000;";
-
-      session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-        const headers = { ...(details.responseHeaders || {}) };
-
-        // 删掉旧 CSP，避免叠加
-        delete headers["Content-Security-Policy"];
-        delete headers["content-security-policy"];
-        delete headers["Content-Security-Policy-Report-Only"];
-        delete headers["content-security-policy-report-only"];
-
-        headers["Content-Security-Policy"] = [CSP];
-        callback({ responseHeaders: headers });
-      });
-
-      setupIpc();
-      mainWin = createWindow();
-
-      await startCallbackServer(mainWin);
-    })().catch((err) => {
-      console.error("Startup failed:", err);
-    });
-  });
+  installCSP();
   setupIpc();
 
   mainWin = createWindow();
-
   await startCallbackServer(mainWin);
 
-  // 启动时注册：窗口快捷键
-  const winAcc = store.get('shortcuts.toggleWindow');
-  registerToggleShortcut(winAcc);
+  // 注册快捷键
+  registerToggleShortcut(store.get("shortcuts.toggleWindow"));
+  registerMicShortcut(store.get("shortcuts.toggleMic"));
 
-  // ✅ 启动时注册：麦克风快捷键
-  const micAcc = store.get('shortcuts.toggleMic');
-  registerMicShortcut(micAcc);
+  // 更新器
+  setupAutoUpdater();
+
+  // 启动自动检查一次（可删）
+  await checkForUpdatesSafe();
 });
 
-app.on('will-quit', () => {
+app.on("will-quit", () => {
   globalShortcut.unregisterAll();
-
   try {
     if (callbackServer) callbackServer.close();
   } catch (_) {}
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
 });
 
-app.on('activate', () => {
+app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     mainWin = createWindow();
   }

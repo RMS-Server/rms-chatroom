@@ -17,6 +17,7 @@ const API_BASE = import.meta.env.VITE_API_BASE || 'https://preview-chatroom.rms.
 
 const STORAGE_KEY_INPUT = 'rms-voice-input-device'
 const STORAGE_KEY_OUTPUT = 'rms-voice-output-device'
+let firstAddedRoom = true
 
 // Detect iOS devices (iPad, iPhone, iPod, or iPad with desktop mode)
 function isIOS(): boolean {
@@ -536,16 +537,20 @@ export const useVoiceStore = defineStore('voice', () => {
       room.value.on(RoomEvent.TrackSubscribed, async (track, pub, participant) => {
         if (participant instanceof RemoteParticipant) {
           // Handle audio tracks
-          if (track.kind === Track.Kind.Audio && pub.source === Track.Source.Microphone) {
-            const audioElement = track.attach()
-            audioElement.dataset.livekitAudio = 'true'
+          if (track.kind === Track.Kind.Audio) {
+            const audioElement = track.attach() as HTMLAudioElement
+            audioElement.dataset.livekitAudio = "true"
             audioElement.dataset.participantId = participant.identity
-            
+
             let savedVolume = userVolumes.value.get(participant.identity) ?? 100
 
-            if (participant.identity.includes('music-bot')) {
-              console.log(`Music bot detected, setting volume to 10%`)
+            console.log(firstAddedRoom)
+            console.log(`  - Participant ID: ${participant.identity}`)
+            if (participant.identity.includes('music-bot') && firstAddedRoom) {
+              console.log(`Music bot detected, firstAddedRoom: true, setting default volume to 30%`)
               savedVolume = 30;
+              userVolumes.value.set(participant.identity, 30)
+              firstAddedRoom = false;
             }
 
             console.log(`Subscribing to audio track of ${participant.identity}, saved volume: ${savedVolume}%`)
@@ -562,7 +567,7 @@ export const useVoiceStore = defineStore('voice', () => {
               })
             } else {
               // Non-iOS: use native audioElement.volume
-              audioElement.volume = Math.min(savedVolume / 100, 1)
+              audioElement.volume = Math.pow(Math.max(0, Math.min(savedVolume, 100)) / 100, 2.6)
               participantAudioMap.set(participant.identity, { 
                 audioElement, 
                 volume: savedVolume 
@@ -588,8 +593,8 @@ export const useVoiceStore = defineStore('voice', () => {
             remoteScreenShares.value = newMap
           }
           // Handle screen share audio tracks
-          else if (track.kind === Track.Kind.Audio && pub.source === Track.Source.ScreenShareAudio) {
-            const audioElement = track.attach()
+          else if (pub.source === Track.Source.ScreenShareAudio) {
+            const audioElement = track.attach() as HTMLAudioElement
             audioElement.dataset.livekitAudio = 'true'
             audioElement.dataset.participantId = participant.identity
             audioElement.dataset.screenShareAudio = 'true'
@@ -606,27 +611,43 @@ export const useVoiceStore = defineStore('voice', () => {
       })
 
       room.value.on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+        // Detach first and remove all from DOM later to avoid issues
+        const detachedEls = track.detach()
+        const elList = Array.isArray(detachedEls) ? detachedEls : [detachedEls]
+
         if (participant instanceof RemoteParticipant) {
-          // Handle audio track cleanup
-          if (pub.source === Track.Source.Microphone) {
+          // Clear if it is a audio track
+          if (track.kind === Track.Kind.Audio) {
             const info = participantAudioMap.get(participant.identity)
-            if (info?.gainNode) {
-              info.gainNode.disconnect()
+
+            if (info) {
+              // Only remove if the audioElement matches or is disconnected
+              const matched =
+                info.audioElement && elList.includes(info.audioElement)
+
+              const disconnected =
+                info.audioElement && !info.audioElement.isConnected
+
+              if (matched || disconnected || !info.audioElement) {
+                if (info.gainNode) info.gainNode.disconnect()
+                if (info.sourceNode) info.sourceNode.disconnect()
+                participantAudioMap.delete(participant.identity)
+              }
             }
-            if (info?.sourceNode) {
-              info.sourceNode.disconnect()
-            }
-            participantAudioMap.delete(participant.identity)
           }
-          // Handle screen share cleanup
+
+          // Clear the screen share entry if applicable
           else if (pub.source === Track.Source.ScreenShare) {
             const newMap = new Map(remoteScreenShares.value)
             newMap.delete(participant.identity)
             remoteScreenShares.value = newMap
           }
         }
-        track.detach().forEach((el) => el.remove())
+
+        // Clear the DOM elements after handling
+        elList.forEach((el) => el.remove())
       })
+
 
       await room.value.connect(url, token)
       await room.value.localParticipant.setMicrophoneEnabled(true)
@@ -710,7 +731,6 @@ export const useVoiceStore = defineStore('voice', () => {
     screenSharerName.value = null
   }
 
- // 1) 保持 toggleMute 只负责静音逻辑
   async function toggleMute(): Promise<boolean> {
     if (!room.value) return isMuted.value
 
@@ -720,24 +740,6 @@ export const useVoiceStore = defineStore('voice', () => {
     updateParticipants()
     return isMuted.value
   }
-
-  // 2) ✅ 在 toggleMute 外面绑定一次全局快捷键
-  let _micHotkeyBound = false
-
-  function bindMicHotkeyOnce() {
-    if (_micHotkeyBound) return
-    _micHotkeyBound = true
-
-    // Electron 环境才会有
-    window.electronAPI?.onMicToggle?.(() => {
-      console.log('[hotkey] mic:toggle -> voice.toggleMute()')
-      toggleMute()
-    })
-  }
-
-  // 3) ✅ 在 store 初始化时调用一次（只要 store 被创建就会绑定）
-  bindMicHotkeyOnce()
-
 
   function setGlobalMute(muted: boolean) {
     const audioElements = document.querySelectorAll('audio[data-livekit-audio="true"]')
@@ -780,6 +782,7 @@ export const useVoiceStore = defineStore('voice', () => {
   ): { success: boolean; showWarning: boolean } {
     const clampedVolume = Math.max(0, Math.min(300, volume))
     const currentVolume = userVolumes.value.get(participantId) ?? 100
+    console.log(`[setUserVolume] called id=${participantId}, target=${clampedVolume}, hasMap=${participantAudioMap.has(participantId)}`)
 
     // Safety check: crossing 100% threshold requires warning acknowledgement
     if (currentVolume <= 100 && clampedVolume > 100 && !bypassWarning) {
@@ -849,7 +852,14 @@ export const useVoiceStore = defineStore('voice', () => {
 
       } else if (!isIOS() && participantAudio.audioElement) {
         // Non-iOS: use native volume (max 100%)
-        participantAudio.audioElement.volume = Math.pow(Math.max(0, Math.min(clampedVolume, 100)) / 100, 2.6);;
+        participantAudio.audioElement.volume = Math.pow(Math.max(0, Math.min(clampedVolume, 100)) / 100, 2.6);
+
+        console.log(`  - Website using Audio element volume control`)
+        console.log(`  - First added room: ${firstAddedRoom}`)
+        console.log(`  - Setting audioElement.volume to: ${participantAudio.audioElement.volume}`)
+        console.log(`  - Audio element paused: ${participantAudio.audioElement.paused}`)
+        console.log(`  - Audio element muted: ${participantAudio.audioElement.muted}`)
+        console.log(`  - Audio element readyState: ${participantAudio.audioElement.readyState}`)
       }
       
       // Update stored volume
